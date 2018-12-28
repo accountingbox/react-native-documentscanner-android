@@ -48,6 +48,7 @@ import com.documentscanner.helpers.CustomOpenCVLoader;
 import com.documentscanner.helpers.OpenNoteMessage;
 import com.documentscanner.helpers.PreviewFrame;
 import com.documentscanner.helpers.ScannedDocument;
+import com.documentscanner.views.QuadrilateralView;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeMap;
@@ -108,6 +109,7 @@ public class OpenNoteCameraView extends JavaCameraView implements PictureCallbac
     private View blinkView = null;
     private View mView = null;
     private boolean manualCapture = false;
+    private QuadrilateralView quadrilateralView;
 
     public static OpenNoteCameraView mThis;
 
@@ -275,6 +277,7 @@ public class OpenNoteCameraView extends JavaCameraView implements PictureCallbac
 
     public void turnCameraOn() {
         mSurfaceView = (SurfaceView) mView.findViewById(R.id.surfaceView);
+        quadrilateralView = (QuadrilateralView) mView.findViewById(R.id.quadrilateral_view);
         mSurfaceHolder = this.getHolder();
         mSurfaceHolder.addCallback(this);
         mSurfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
@@ -748,6 +751,7 @@ public class OpenNoteCameraView extends JavaCameraView implements PictureCallbac
 
         @Override
         public void run() {
+
             final ImageView imageView = (ImageView) mView.findViewById(R.id.scannedAnimation);
 
             Display display = mActivity.getWindowManager().getDefaultDisplay();
@@ -970,5 +974,22 @@ public class OpenNoteCameraView extends JavaCameraView implements PictureCallbac
 
         safeToTakePicture = true;
 
+    }
+
+    public void onRectangleDetect(final Point[] squareCorners){
+        mActivity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (quadrilateralView.isHidden()) {
+                    quadrilateralView.show();
+//            circleProgressBar.setAlpha(1);
+                    quadrilateralView.setCorners(squareCorners);
+//            circleProgressBar.setProgressWithAnimation(0);
+
+                } else {
+                    quadrilateralView.setCornersWithAnimation(squareCorners);
+                }
+            }
+        });
     }
 }

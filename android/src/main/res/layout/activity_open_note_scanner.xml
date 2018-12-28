@@ -23,6 +23,11 @@
         android:layout_alignParentRight="true"
         android:layout_alignParentEnd="true" />
 
+    <com.documentscanner.views.QuadrilateralView
+        android:id="@+id/quadrilateral_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <!-- This FrameLayout insets its children based on system windows using
          android:fitsSystemWindows. -->
     <!--<FrameLayout-->
