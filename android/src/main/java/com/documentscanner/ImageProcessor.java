@@ -52,6 +52,8 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
  * Created by allgood on 05/03/16.
@@ -73,6 +75,15 @@ public class ImageProcessor extends Handler {
     private int numOfSquares = 0;
     private int numOfRectangles = 10;
     private boolean noGrayscale = false;
+    private String overlayColor = "";
+    int intervalTime = 300;
+    private boolean detectRectangle;
+
+    Timer timer;
+
+
+    //the detection area should be more than this minimum percentage of total picture size
+    private double minimumDetectionAreaPercentage = 0.05;
 
     public ImageProcessor (Looper looper , Handler uiHandler , OpenNoteCameraView mainActivity, Context context) {
         super(looper);
@@ -80,6 +91,13 @@ public class ImageProcessor extends Handler {
         this.mMainActivity = mainActivity;
         SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(context);
         mBugRotate = sharedPref.getBoolean("bug_rotate",false);
+        timer = new Timer();
+        timer.schedule( new TimerTask() {
+            @Override
+            public void run() {
+                detectRectangle = true;
+            }
+        }, 0, intervalTime);
     }
 
     public void setNumOfRectangles(int numOfRectangles){
@@ -96,6 +114,10 @@ public class ImageProcessor extends Handler {
 
     public void setRemoveGrayScale(boolean grayscale){
         this.noGrayscale =  grayscale;
+    }
+
+    public void setOverlayColor(String rgbaColor){
+        this.overlayColor = rgbaColor;
     }
 
     public void handleMessage ( Message msg ) {
@@ -153,16 +175,21 @@ public class ImageProcessor extends Handler {
         boolean previewOnly = previewFrame.isPreviewOnly();
         boolean focused = mMainActivity.isFocused();
 
-        if ( detectPreviewDocument(frame) && focused ) {
-            numOfSquares ++;
-            if(numOfSquares == numOfRectangles) {
-                mMainActivity.blinkScreenAndShutterSound();
-                mMainActivity.waitSpinnerVisible();
-                mMainActivity.requestPicture();
+        if(detectRectangle) {
+            detectRectangle=false;
+            if (detectPreviewDocument(frame) && focused) {
+                numOfSquares++;
+                if (numOfSquares == numOfRectangles) {
+                    mMainActivity.blinkScreenAndShutterSound();
+                    mMainActivity.waitSpinnerVisible();
+                    mMainActivity.requestPicture();
+                    numOfSquares = 0;
+                }
+            } else {
                 numOfSquares = 0;
+                mMainActivity.onRectangleUndetected();
+
             }
-        }else{
-            numOfSquares = 0;
         }
 
         frame.release();
@@ -239,6 +266,10 @@ public class ImageProcessor extends Handler {
 
         ArrayList<MatOfPoint> contours = findContours(inputRgba);
 
+        if(contours.size()> 0){
+            Log.i(TAG, "Biggest countour area" +Imgproc.contourArea(contours.get(0)));
+        }
+
         Quadrilateral quad = getQuadrilateral(contours, inputRgba.size());
 
         Log.i("DESENHAR","Quad----->"+quad);
@@ -247,29 +278,40 @@ public class ImageProcessor extends Handler {
         mPreviewSize = inputRgba.size();
 
         if (quad != null) {
+            Log.i("DESENHAR","Quad found----->"+quad);
 
             Point[] rescaledPoints = new Point[4];
 
-            double ratio = inputRgba.size().height / 500;
+            double ratio = inputRgba.size().width / 200;
 
+            float previewWidth = (float) mPreviewSize.width;
+            float previewHeight = (float) mPreviewSize.height;
 
             for ( int i=0; i<4 ; i++ ) {
-                int x = Double.valueOf(quad.points[i].x*ratio).intValue();
-                int y = Double.valueOf(quad.points[i].y*ratio).intValue();
+//                int x = Double.valueOf(quad.points[i].x*ratio).intValue();
+//                int y = Double.valueOf(quad.points[i].y*ratio).intValue();
+                // ATTENTION: axis are swapped
+                int x = Double.valueOf(previewHeight-quad.points[i].y*ratio).intValue();
+                int y = Double.valueOf(quad.points[i].x*ratio).intValue();
+
                 if (mBugRotate) {
                     rescaledPoints[(i+2)%4] = new Point( Math.abs(x- mPreviewSize.width), Math.abs(y- mPreviewSize.height));
                 } else {
                     rescaledPoints[i] = new Point(x, y);
                 }
             }
+            mPreviewPoints = addPadding(rescaledPoints, 10.0);
 
-            mPreviewPoints = rescaledPoints;
+//            drawDocumentBox(mPreviewPoints, mPreviewSize);
 
-            drawDocumentBox(mPreviewPoints, mPreviewSize);
+            mMainActivity.onRectangleDetect(mPreviewPoints);
 
             return true;
 
         }
+
+        //TODO hide square when no square detected
+//        mMainActivity.onRectangleDetectLost();
 
         mMainActivity.getHUD().clear();
         mMainActivity.invalidateHUD();
@@ -278,7 +320,32 @@ public class ImageProcessor extends Handler {
 
     }
 
-    private void drawDocumentBox(Point[] points, Size stdSize) {
+    private Point[] addPadding(Point[] src, double padding) {
+
+        Point[] out = new Point[4];
+
+        //topleft -> topright
+        //topright -> bottomright
+        //bottomright -> bottomleft
+        //bottomleft -> topleft
+
+        //topright
+        out[0] = new Point(src[0].x+padding,src[0].y-padding);
+
+        //bottomright
+        out[1] = new Point(src[1].x+padding,src[1].y+padding);
+
+        //bottomleft
+        out[2] = new Point(src[2].x-padding,src[2].y+padding);
+
+        //topleft
+        out[3] = new Point(src[3].x-padding,src[3].y-padding);
+
+        return out;
+
+    }
+
+        private void drawDocumentBox(Point[] points, Size stdSize) {
 
         Path path = new Path();
 
@@ -289,19 +356,25 @@ public class ImageProcessor extends Handler {
         float previewWidth = (float) stdSize.height;
         float previewHeight = (float) stdSize.width;
 
-        path.moveTo( previewWidth - (float) points[0].y, (float) points[0].x );
-        path.lineTo( previewWidth - (float) points[1].y, (float) points[1].x );
-        path.lineTo( previewWidth - (float) points[2].y, (float) points[2].x );
-        path.lineTo( previewWidth - (float) points[3].y, (float) points[3].x );
+        path.moveTo((float) points[0].x, (float) points[0].y );
+        path.lineTo( (float) points[1].x, (float) points[1].y);
+        path.lineTo( (float) points[2].x, (float) points[2].y);
+        path.lineTo( (float) points[3].x, (float) points[3].y);
+
+//        path.moveTo( previewWidth - (float) points[0].y, (float) points[0].x );
+//        path.lineTo( previewWidth - (float) points[1].y, (float) points[1].x );
+//        path.lineTo( previewWidth - (float) points[2].y, (float) points[2].x );
+//        path.lineTo( previewWidth - (float) points[3].y, (float) points[3].x );
         path.close();
 
         PathShape newBox = new PathShape(path , previewWidth , previewHeight);
 
         Paint paint = new Paint();
-        paint.setColor(Color.argb(180, 66, 165, 245));
+//        paint.setColor(Color.argb(180, 21, 200, 112));
+        paint.setColor(Color.argb(200, 0, 0, 0));
 
         Paint border = new Paint();
-        border.setColor(Color.rgb(66, 165, 245));
+        border.setColor(Color.rgb(21, 200, 112));
         border.setStrokeWidth(5);
 
         hud.clear();
@@ -313,24 +386,42 @@ public class ImageProcessor extends Handler {
 
     private Quadrilateral getQuadrilateral(ArrayList<MatOfPoint> contours , Size srcSize ) {
 
-        double ratio = srcSize.height / 500;
-        int height = Double.valueOf(srcSize.height / ratio).intValue();
-        int width = Double.valueOf(srcSize.width / ratio).intValue();
+//        double ratio = srcSize.height / 500;
+//        int height = Double.valueOf(srcSize.height / ratio).intValue();
+//        int width = Double.valueOf(srcSize.width / ratio).intValue();
+
+        Double width = 200.0;
+        Double ratio = srcSize.width / width;
+        Double height = srcSize.height / ratio;
         Size size = new Size(width,height);
+
+        Log.i(TAG, "size width "+ width);
+        Log.i(TAG, "size height "+ height);
+
 
         for ( MatOfPoint c: contours ) {
             MatOfPoint2f c2f = new MatOfPoint2f(c.toArray());
             double peri = Imgproc.arcLength(c2f, true);
             MatOfPoint2f approx = new MatOfPoint2f();
-            Imgproc.approxPolyDP(c2f, approx, 0.02 * peri, true);
+            Imgproc.approxPolyDP(c2f, approx, 0.04 * peri, true);
 
             Point[] points = approx.toArray();
 
             // select biggest 4 angles polygon
+            // square contours should have 4 vertices after approximation
+            // relatively large area (to filter out noisy contours)
+            // and be convex.
+            // Note: absolute value of an area is used because
+            // area may be positive or negative - in accordance with the
+            // contour orientation
             if (points.length == 4) {
                 Point[] foundPoints = sortPoints(points);
+//                if (insideArea(foundPoints, size)) {
+                MatOfPoint approxPoints = new MatOfPoint(points);
 
-                if (insideArea(foundPoints, size)) {
+                if(Math.abs(Imgproc.contourArea(approxPoints)) > width*height*minimumDetectionAreaPercentage &&
+                        Imgproc.isContourConvex(approxPoints) ) {
+
                     return new Quadrilateral( c , foundPoints );
                 }
             }
@@ -338,6 +429,8 @@ public class ImageProcessor extends Handler {
 
         return null;
     }
+
+
 
     private Point[] sortPoints(Point[] src ) {
 
@@ -397,9 +490,32 @@ public class ImageProcessor extends Handler {
 
     private void enhanceDocument( Mat src ) {
         if(!this.noGrayscale){
-            Imgproc.cvtColor(src,src, Imgproc.COLOR_RGBA2GRAY);
+//            Imgproc.cvtColor(src,src, Imgproc.COLOR_RGBA2GRAY);
+//            Mat blur = new Mat(src.rows(), src.cols(), src.type());
+////            Mat out = new Mat(src.rows(), src.cols(), src.type());
+//            Imgproc.medianBlur(src, blur, 65);
+//            src.convertTo(src, CvType.CV_32FC3);
+//            blur.convertTo(blur, CvType.CV_32FC3);
+//            src = blur;
+//            Core.divide(src, blur, src);
         }
         src.convertTo(src,CvType.CV_8UC1, colorGain , colorBias);
+    }
+
+    private Mat blendDivide(Mat input1, Mat input2){
+
+        int size = (int) input1.total() * input1.channels();
+        float[] buff1 = new float[size];
+        float[] buff2 = new float[size];
+        input1.get(0, 0, buff1);
+        input2.get(0, 0, buff2);
+
+        for(int i = 0; i < size; i++)
+        {
+            buff1[i] = Math.min(255.0f, Math.max(0.0f, (float) (256*buff1[i])/(buff2[i]+1)));
+        }
+        input1.put(0, 0, buff1);
+        return input1;
     }
 
 
@@ -448,7 +564,7 @@ public class ImageProcessor extends Handler {
 
     private Mat fourPointTransform(Mat src , Point[] pts ) {
 
-        double ratio = src.size().height / 500;
+        double ratio = src.size().width / 200;
         int height = Double.valueOf(src.size().height / ratio).intValue();
         int width = Double.valueOf(src.size().width / ratio).intValue();
 
@@ -489,21 +605,39 @@ public class ImageProcessor extends Handler {
 
         Mat grayImage = null;
         Mat cannedImage = null;
+        Mat blurredImage = null;
         Mat resizedImage = null;
 
-        double ratio = src.size().height / 500;
-        int height = Double.valueOf(src.size().height / ratio).intValue();
-        int width = Double.valueOf(src.size().width / ratio).intValue();
+//        double ratio = src.size().height / 500;
+//        int height = Double.valueOf(src.size().height / ratio).intValue();
+//        int width = Double.valueOf(src.size().width / ratio).intValue();
+
+        Double width = 200.0;
+        Double ratio = src.width() / width;
+        Double height = src.height() / ratio;
+
         Size size = new Size(width,height);
 
         resizedImage = new Mat(size, CvType.CV_8UC4);
+
         grayImage = new Mat(size, CvType.CV_8UC4);
+        blurredImage = new Mat(size, CvType.CV_8UC4);
         cannedImage = new Mat(size, CvType.CV_8UC1);
 
         Imgproc.resize(src,resizedImage,size);
+//        resizedImage = rotate90degrees(resizedImage);
+
         Imgproc.cvtColor(resizedImage, grayImage, Imgproc.COLOR_RGBA2GRAY, 4);
-        Imgproc.GaussianBlur(grayImage, grayImage, new Size(5, 5), 0);
-        Imgproc.Canny(grayImage, cannedImage, 80, 100, 3, false);
+//        Imgproc.bilateralFilter(grayImage, blurredImage, 11, 17, 17);
+        Imgproc.GaussianBlur(grayImage, blurredImage, new Size(5, 5), 0);
+
+        double gamma = 0.33;
+        double beta = 60;
+        double mean = Core.mean(blurredImage).val[0];
+        Double lower = Math.max(0.0, (1.0 - gamma) * mean - beta);
+        Double higher = Math.min(255.0, (1.0 + gamma) * mean - beta);
+
+        Imgproc.Canny(blurredImage, cannedImage, 0, higher, 3, false);
 
         ArrayList<MatOfPoint> contours = new ArrayList<MatOfPoint>();
         Mat hierarchy = new Mat();
@@ -512,19 +646,28 @@ public class ImageProcessor extends Handler {
 
         hierarchy.release();
 
+
+
         Collections.sort(contours, new Comparator<MatOfPoint>() {
 
             @Override
             public int compare(MatOfPoint lhs, MatOfPoint rhs) {
-            return Double.valueOf(Imgproc.contourArea(rhs)).compareTo(Imgproc.contourArea(lhs));
+                return Double.valueOf(Imgproc.contourArea(rhs)).compareTo(Imgproc.contourArea(lhs));
             }
         });
 
         resizedImage.release();
         grayImage.release();
+        blurredImage.release();
         cannedImage.release();
 
         return contours;
+    }
+
+    private Mat rotate90degrees(Mat input){
+        Core.transpose(input, input);
+        Core.flip(input, input, 1);
+        return input;
     }
 
     private QRCodeMultiReader qrCodeMultiReader = new QRCodeMultiReader();

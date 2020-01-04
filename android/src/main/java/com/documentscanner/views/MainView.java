@@ -71,7 +71,7 @@ public class MainView extends FrameLayout{
     }
 
     public void setOverlayColor(String rgbaColor){
-
+        view.setOverlayColor(rgbaColor);
     }
 
     public void setBrightness(double brightness){
